@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.clock import utcnow
 from app.config import settings
-from app.models import Link, utcnow
+from app.models import Link
 
 URL = "https://example.com/some/long/path"
 
@@ -20,6 +21,7 @@ def insert_expired_link(session_factory, code="old"):
 
 
 # ---------- creation ----------
+
 
 def test_create_link_returns_generated_code(client):
     resp = create(client)
@@ -49,7 +51,7 @@ def test_invalid_urls_are_rejected(client, bad_url):
 
 
 def test_past_expiry_is_rejected(client):
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     assert create(client, expires_at=past).status_code == 422
 
 
@@ -69,6 +71,7 @@ def test_generated_code_collision_is_retried(client, monkeypatch):
 
 # ---------- redirect ----------
 
+
 def test_redirect_returns_302_to_original_url(client):
     code = create(client, custom_alias="promo").json()["code"]
     resp = client.get(f"/{code}", follow_redirects=False)
@@ -81,7 +84,7 @@ def test_unknown_code_returns_404(client):
 
 
 def test_link_with_future_expiry_still_redirects(client):
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     code = create(client, expires_at=future).json()["code"]
     assert client.get(f"/{code}", follow_redirects=False).status_code == 302
 
@@ -95,6 +98,7 @@ def test_expired_link_returns_410_and_is_not_counted(client, session_factory):
 
 
 # ---------- analytics ----------
+
 
 def test_clicks_are_counted_and_last_click_recorded(client):
     code = create(client).json()["code"]

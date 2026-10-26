@@ -5,11 +5,7 @@ from app.config import settings
 
 # SQLite objects are bound to the creating thread by default; FastAPI serves
 # sync endpoints from a threadpool, so we must relax that check.
-connect_args = (
-    {"check_same_thread": False}
-    if settings.database_url.startswith("sqlite")
-    else {}
-)
+connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 
 engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -24,5 +20,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()  # never leave a half-finished transaction open
+        raise
     finally:
         db.close()

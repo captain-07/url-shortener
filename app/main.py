@@ -1,52 +1,76 @@
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app import models  # noqa: F401  (registers tables on Base before create_all)
-from app.database import Base, engine
-from app.exceptions import (
-    AliasTakenError,
-    CodeGenerationError,
-    LinkExpiredError,
-    LinkNotFoundError,
-)
+from app.database import Base, engine, get_db
+from app.exceptions import AppError
 from app.routers import links, redirect
+
+TAGS_METADATA = [
+    {"name": "links", "description": "Create short links and read their statistics."},
+    {"name": "redirect", "description": "Resolve a short code to its original URL."},
+    {"name": "health", "description": "Liveness probe for deployments."},
+]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)  # fine for this scope; use Alembic migrations in production
+    # Fine for this scope; a production deployment would use Alembic migrations.
+    Base.metadata.create_all(bind=engine)
     yield
 
 
-app = FastAPI(title="URL Shortener API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="URL Shortener API",
+    version="1.0.0",
+    description=(
+        "Shorten URLs with optional custom aliases and expiry, redirect visitors, "
+        "and read per-link click statistics."
+    ),
+    openapi_tags=TAGS_METADATA,
+    lifespan=lifespan,
+)
 
 
-@app.exception_handler(LinkNotFoundError)
-async def not_found_handler(request: Request, exc: LinkNotFoundError):
-    return JSONResponse(status_code=404, content={"detail": f"Short link '{exc.code}' does not exist."})
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    """One handler for every domain error: the exception owns its status/message."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail()})
 
 
-@app.exception_handler(LinkExpiredError)
-async def expired_handler(request: Request, exc: LinkExpiredError):
+def _summarise(errors: Sequence[Mapping[str, Any]]) -> str:
+    parts = []
+    for error in errors:
+        location = ".".join(str(part) for part in error["loc"] if part != "body")
+        parts.append(f"{location or 'body'}: {error['msg']}")
+    return "; ".join(parts) or "Invalid request."
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """Keep 422 bodies in the same `{"detail": "<string>"}` shape as every
+    other error, while still exposing the per-field list for clients that want
+    to render it programmatically."""
+    errors = exc.errors()
     return JSONResponse(
-        status_code=410,
-        content={"detail": f"Short link '{exc.code}' expired on {exc.expired_at.isoformat()}Z and is no longer available."},
+        status_code=422,
+        content={"detail": _summarise(errors), "errors": jsonable_encoder(errors)},
     )
 
 
-@app.exception_handler(AliasTakenError)
-async def alias_taken_handler(request: Request, exc: AliasTakenError):
-    return JSONResponse(
-        status_code=409,
-        content={"detail": f"Alias '{exc.alias}' is already taken. Please choose a different alias."},
-    )
-
-
-@app.exception_handler(CodeGenerationError)
-async def codegen_handler(request: Request, exc: CodeGenerationError):
-    return JSONResponse(status_code=500, content={"detail": "Could not generate a unique short code. Please retry."})
+@app.get("/health", tags=["health"], summary="Health check")
+def health(db: Session = Depends(get_db)) -> dict[str, str]:
+    """Cheap readiness probe: verifies the app is up and the database answers."""
+    db.execute(text("SELECT 1"))
+    return {"status": "ok"}
 
 
 app.include_router(links.router)
