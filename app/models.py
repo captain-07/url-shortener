@@ -11,6 +11,8 @@ def utcnow() -> datetime:
     and treat every stored datetime as UTC."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+def as_utc(dt: datetime | None) -> datetime | None:
+    return dt.replace(tzinfo=timezone.utc) if dt else None 
 
 class Link(Base):
     __tablename__ = "links"
