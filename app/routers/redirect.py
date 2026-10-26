@@ -12,5 +12,5 @@ router = APIRouter(tags=["redirect"])
 def redirect_to_original(code: str, db: Session = Depends(get_db)):
     link = services.get_link(db, code)   # 404 if unknown
     services.ensure_active(link)         # 410 if expired
-    # Step 9 adds click recording here
+    services.record_click(db, link)      # only reached for valid, active links
     return RedirectResponse(url=link.original_url, status_code=302)

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -58,3 +58,14 @@ def get_link(db: Session, code: str) -> Link:
 def ensure_active(link: Link) -> None:
     if link.expires_at is not None and link.expires_at <= utcnow():
         raise LinkExpiredError(link.code, link.expires_at)
+
+
+def record_click(db: Session, link: Link) -> None:
+    """Atomically bump the counter. The increment happens inside the database,
+    so concurrent redirects can't overwrite each other's updates."""
+    db.execute(
+        update(Link)
+        .where(Link.id == link.id)
+        .values(click_count=Link.click_count + 1, last_clicked_at=utcnow())
+    )
+    db.commit()
